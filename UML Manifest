@@ -1,0 +1,40 @@
+@startuml
+
+box "Media-Dubbing-Watchfolder" #lightblue
+
+participant "Script" as Script
+participant "FFmpeg" as FFmpeg
+
+end box
+participant "Vimeo" as Vimeo
+
+
+activate Script
+Script -> Script: New MP4 file detected
+Script -> Script: Check for corresponding MP3
+alt MP3 found
+    Script -> FFmpeg: Extract audio from MP4
+    activate FFmpeg
+    FFmpeg --> Script: Audio extracted
+    deactivate FFmpeg
+
+    Script -> FFmpeg: Extract video without audio from MP4
+    activate FFmpeg
+    FFmpeg --> Script: Video extracted
+    deactivate FFmpeg
+
+    Script -> FFmpeg: Merge video with MP3
+    activate FFmpeg
+    FFmpeg --> Script: Video merged
+    deactivate FFmpeg
+
+    Script -> Script: Extract metadata
+    Script -> Vimeo: Upload video with metadata
+    activate Vimeo
+    Vimeo --> Script: Upload successful
+    deactivate Vimeo
+else MP3 not found
+    Script -> Script: Log error
+end
+deactivate Script
+@enduml
