@@ -1,0 +1,170 @@
+import os
+import subprocess
+import requests
+import time
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+import mutagen.mp4
+
+# Vimeo API access token
+access_token = '{TOKEN}'  # Replace with your actual access token
+
+# Define the folder path to monitor
+folder_to_monitor = '{PATH}'
+
+# Function to handle file system events (e.g., file creation)
+class DubbedVideoHandler(FileSystemEventHandler):
+    def on_created(self, event):
+        # Check if the event corresponds to a file creation event
+        if event.event_type == 'created':
+            # Start the dubbing and upload process for the new file
+            file_path = event.src_path
+            if file_path.endswith('.mp4'):
+                # If the file is a video, find associated MP3 audio
+                mp3_path = file_path[:-4] + '.mp3'
+                print(f"Found new video file: {file_path}")
+                print(f"Looking for corresponding audio file: {mp3_path}")
+                if os.path.exists(mp3_path):
+                    print(f"Found matching audio file. Starting processing...")
+                    self.process_video(file_path, mp3_path)
+                else:
+                    print(f"No associated MP3 file found for {file_path}")
+
+    def process_video(self, mp4_path, mp3_path):
+        try:
+            # Extract filename and extension separately
+            filename, ext = os.path.splitext(os.path.basename(mp4_path))  
+            output_path = os.path.join(folder_to_monitor, filename + "_dubbed.mp4")
+
+            # FFmpeg commands 
+            audio_only_command = [
+                "ffmpeg",
+                "-i", mp4_path,
+                "-vn", "-acodec", "mp3", "audio_only.mp3"  # Extract audio as MP3
+            ]
+
+            video_only_command = [
+                "ffmpeg",
+                "-i", mp4_path,
+                "-an", "-c:v", "copy", "video_only.mp4"
+            ]
+
+            merge_command = [
+                "ffmpeg",
+                "-i", "video_only.mp4",  # Video input first
+                "-i", mp3_path,  # Audio input second
+                "-map", "0:v",
+                "-map", "1:a",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                output_path
+            ]
+
+            print("Starting FFmpeg processing...")
+            subprocess.run(audio_only_command, check=True)
+            print("Extracted audio from video.")
+
+            subprocess.run(video_only_command, check=True)
+            print("Extracted video without audio.")
+
+            print(f"FFmpeg command: {' '.join(merge_command)}")  # Print the merge command
+            subprocess.run(merge_command, check=True)
+            print("Merged video and audio successfully.")
+
+            # Extract title from MP4 metadata (using mutagen)
+            try:
+                tags = mutagen.mp4.MP4(mp4_path)
+                title = tags.get('\xa9nam', [filename]) if tags.get('\xa9nam') else filename
+            except mutagen.mp4.MP4StreamInfoError:
+                print(f"Could not read metadata from {mp4_path}")
+                title = filename
+
+            print(f"Starting upload to Vimeo...")
+            upload_to_vimeo(output_path, title, access_token)  # Pass access_token
+            print(f"Upload of '{title}' complete.")
+
+            # Cleanup
+            os.remove(mp4_path)
+            os.remove(mp3_path)
+            os.remove("audio_only.mp3")
+            os.remove("video_only.mp4")
+            os.remove(output_path)
+
+        except subprocess.CalledProcessError as e:
+            print(f"FFmpeg error: {e}")
+        except Exception as e:
+            print(f"Error processing video: {e}")
+
+
+# Function to upload a file to Vimeo (modified to accept access_token)
+def upload_to_vimeo(video_path, title, access_token):
+    try:
+        print(requests.__version__)  # Print the version of the requests library
+        file_size = os.path.getsize(video_path)
+
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/vnd.vimeo.*+json;version=3.4'
+        }
+
+        params = {
+            'upload': {
+                'approach': 'tus',
+                'size': file_size,
+            },
+            'name': title,
+        }
+
+        # Try uploading with SSL verification disabled
+        try:
+            response = requests.post('https://api.vimeo.com/me/videos', headers=headers, json=params, verify=False)
+            response.raise_for_status()
+        except requests.exceptions.SSLError:
+            # If SSL verification fails, try specifying the CA bundle
+            try:
+                response = requests.post('https://api.vimeo.com/me/videos', headers=headers, json=params, verify='/Library/Frameworks/Python.framework/Versions/3.10/etc/ssl/cert.pem')
+                response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                print(f"Vimeo API error: {e}")
+                return  # Exit the function if upload fails
+
+        video_data = response.json()
+        upload_link = video_data.get('upload', {}).get('upload_link')
+
+        with open(video_path, 'rb') as f:
+            chunk_size = 26214400  # 25MB chunks (adjust as needed)
+            offset = 0
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+
+                upload_headers = {
+                    'Tus-Resumable': '1.0.0',
+                    'Upload-Offset': str(offset),
+                    'Content-Type': 'application/offset+octet-stream'
+                }
+                upload_response = requests.patch(upload_link, headers=upload_headers, data=chunk)
+                upload_response.raise_for_status()
+                offset += len(chunk)
+
+        print(f"Video '{title}' uploaded successfully!")
+
+    except requests.exceptions.RequestException as e:
+        print(f"Vimeo API error: {e}")
+    except Exception as e:
+        print(f"Error uploading to Vimeo: {e}")
+
+# Initialize the file system event handler and observer
+event_handler = DubbedVideoHandler()
+observer = Observer()
+observer.schedule(event_handler, folder_to_monitor, recursive=True)
+observer.start()
+
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    observer.stop()
+observer.join()
