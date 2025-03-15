@@ -12,3 +12,8 @@ https://github.com/josev2046/Media-Dubbing-Pipeline
 
 
 I am using the watchdog library to monitor a designated folder for new video files (file pairs must have the same name, e.g., mydub.mp4 and mydub.mp3). When a new video is detected, the script automatically extracts the original audio, merges the video with a corresponding external audio track, and uploads the dubbed video to Vimeo.
+
+
+[![DOI](https://zenodo.org/badge/932304327.svg)](https://doi.org/10.5281/zenodo.15033361)
+
+
